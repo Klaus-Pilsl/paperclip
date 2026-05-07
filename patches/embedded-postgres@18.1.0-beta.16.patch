@@ -1,16 +1,51 @@
 diff --git a/dist/index.js b/dist/index.js
+index ccfe17a82f4879bf20cc345c579a987d9eba5309..c81095c09b731b1c2ffc8dde7b06147e0e0ebfeb 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -23,7 +23,7 @@
+@@ -23,7 +23,29 @@ const { Client } = pg;
   * for a particular string, we need to force that string into the right locale.
   * @see https://github.com/leinelissen/embedded-postgres/issues/15
   */
 -const LC_MESSAGES_LOCALE = 'en_US.UTF-8';
 +const LC_MESSAGES_LOCALE = 'C';
++// On Windows, if the postgres binaries are at a path with non-ASCII characters
++// (e.g. OneDrive paths with umlauts), postgres cannot locate its own share/ directory
++// because it derives the path from GetModuleFileNameW() and file I/O fails on non-ASCII.
++// Fix: copy the entire native/ directory (bin + share) to a clean ASCII temp path once.
++let _cachedCleanNativeDir = null;
++const resolveCleanNativeDir = (binPath) => __awaiter(void 0, void 0, void 0, function* () {
++    if (_cachedCleanNativeDir)
++        return _cachedCleanNativeDir;
++    if (platform() !== 'win32' || !/[^\x00-\x7F]/.test(binPath))
++        return null;
++    const nativeDir = path.resolve(path.dirname(binPath), '..');
++    const tmpNative = path.join(tmpdir(), 'paperclip-pg-native');
++    const marker = path.join(tmpNative, '.ready');
++    let needsCopy = true;
++    try { yield fs.access(marker); needsCopy = false; } catch (_e) { }
++    if (needsCopy) {
++        yield fs.cp(nativeDir, tmpNative, { recursive: true, force: true });
++        yield fs.writeFile(marker, '');
++    }
++    _cachedCleanNativeDir = tmpNative;
++    return tmpNative;
++});
  // The default configuration options for the class
  const defaults = {
      databaseDir: path.join(process.cwd(), 'data', 'db'),
-@@ -133,7 +133,7 @@
+@@ -84,7 +106,10 @@ class EmbeddedPostgres {
+      */
+     initialise() {
+         return __awaiter(this, void 0, void 0, function* () {
+-            const { postgres, initdb } = yield bin;
++            const { postgres: _rawPostgres, initdb: _rawInitdb } = yield bin;
++            const _cleanNative = yield resolveCleanNativeDir(_rawInitdb);
++            const initdb = _cleanNative ? path.join(_cleanNative, 'bin', 'initdb.exe') : _rawInitdb;
++            const postgres = _cleanNative ? path.join(_cleanNative, 'bin', 'postgres.exe') : _rawPostgres;
+             // GUARD: Check that a postgres user is available 
+             yield this.checkForRootUser();
+             // Optionally retrieve the uid and gid
+@@ -133,7 +158,7 @@ class EmbeddedPostgres {
                      `--pwfile=${passwordFile}`,
                      `--lc-messages=${LC_MESSAGES_LOCALE}`,
                      ...this.options.initdbFlags,
@@ -19,7 +54,18 @@ diff --git a/dist/index.js b/dist/index.js
                  // Connect to stderr, as that is where the messages get sent
                  (_a = process.stdout) === null || _a === void 0 ? void 0 : _a.on('data', (chunk) => {
                      // Parse the data as a string and log it
-@@ -177,7 +177,7 @@
+@@ -160,7 +185,9 @@ class EmbeddedPostgres {
+      */
+     start() {
+         return __awaiter(this, void 0, void 0, function* () {
+-            const { postgres } = yield bin;
++            const { postgres: _rawPostgres } = yield bin;
++            const _cleanNative = yield resolveCleanNativeDir(_rawPostgres);
++            const postgres = _cleanNative ? path.join(_cleanNative, 'bin', 'postgres.exe') : _rawPostgres;
+             // Optionally retrieve the uid and gid
+             const permissionIds = yield this.getUidAndGid()
+                 .catch(() => {
+@@ -177,7 +204,7 @@ class EmbeddedPostgres {
                      '-p',
                      this.options.port.toString(),
                      ...this.options.postgresFlags,
