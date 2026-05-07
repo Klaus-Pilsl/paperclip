@@ -37,6 +37,21 @@ function SecretInput({
   );
 }
 
+function schemaVal(values: AdapterConfigFieldsProps["values"], key: string): string {
+  const sv = values?.adapterSchemaValues ?? {};
+  const v = sv[key];
+  return typeof v === "string" || typeof v === "number" || typeof v === "boolean" ? String(v) : "";
+}
+
+function setSchema(
+  values: AdapterConfigFieldsProps["values"],
+  set: AdapterConfigFieldsProps["set"],
+  key: string,
+  value: string,
+) {
+  set!({ adapterSchemaValues: { ...(values?.adapterSchemaValues ?? {}), [key]: value } });
+}
+
 export function OpenRouterConfigFields({
   isCreate,
   values,
@@ -47,25 +62,25 @@ export function OpenRouterConfigFields({
   models,
 }: AdapterConfigFieldsProps) {
   const modelValue = isCreate
-    ? String(values?.model ?? "")
+    ? (values?.model ?? "openrouter/auto")
     : eff("adapterConfig", "model", String(config.model ?? "openrouter/auto"));
   const apiKeyValue = isCreate
-    ? String(values?.apiKey ?? "")
+    ? schemaVal(values, "apiKey")
     : eff("adapterConfig", "apiKey", String(config.apiKey ?? ""));
   const systemPromptValue = isCreate
-    ? String(values?.systemPrompt ?? "")
+    ? schemaVal(values, "systemPrompt")
     : eff("adapterConfig", "systemPrompt", String(config.systemPrompt ?? ""));
   const temperatureValue = isCreate
-    ? String(values?.temperature ?? "")
+    ? schemaVal(values, "temperature")
     : eff("adapterConfig", "temperature", String(config.temperature ?? ""));
   const maxTokensValue = isCreate
-    ? String(values?.maxTokens ?? "")
+    ? schemaVal(values, "maxTokens")
     : eff("adapterConfig", "maxTokens", String(config.maxTokens ?? ""));
   const streamValue = isCreate
-    ? String(values?.stream ?? "true")
+    ? (schemaVal(values, "stream") || "true")
     : eff("adapterConfig", "stream", String(config.stream ?? "true"));
   const reasoningValue = isCreate
-    ? String(values?.reasoning ?? "false")
+    ? (schemaVal(values, "reasoning") || "false")
     : eff("adapterConfig", "reasoning", String(config.reasoning ?? "false"));
 
   return (
@@ -74,7 +89,9 @@ export function OpenRouterConfigFields({
         <SecretInput
           value={apiKeyValue}
           onCommit={(v) =>
-            isCreate ? set!({ apiKey: v }) : mark("adapterConfig", "apiKey", v || undefined)
+            isCreate
+              ? setSchema(values, set, "apiKey", v)
+              : mark("adapterConfig", "apiKey", v || undefined)
           }
           placeholder="sk-or-v1-..."
         />
@@ -104,7 +121,7 @@ export function OpenRouterConfigFields({
           value={systemPromptValue}
           onChange={(e) =>
             isCreate
-              ? set!({ systemPrompt: e.target.value })
+              ? setSchema(values, set, "systemPrompt", e.target.value)
               : mark("adapterConfig", "systemPrompt", e.target.value || undefined)
           }
           rows={3}
@@ -118,7 +135,7 @@ export function OpenRouterConfigFields({
           value={temperatureValue}
           onCommit={(v) =>
             isCreate
-              ? set!({ temperature: v })
+              ? setSchema(values, set, "temperature", v)
               : mark("adapterConfig", "temperature", v ? parseFloat(v) : undefined)
           }
           className={inputClass}
@@ -131,7 +148,7 @@ export function OpenRouterConfigFields({
           value={maxTokensValue}
           onCommit={(v) =>
             isCreate
-              ? set!({ maxTokens: v })
+              ? setSchema(values, set, "maxTokens", v)
               : mark("adapterConfig", "maxTokens", v ? parseInt(v, 10) : undefined)
           }
           className={inputClass}
@@ -144,7 +161,7 @@ export function OpenRouterConfigFields({
           value={streamValue}
           onChange={(e) =>
             isCreate
-              ? set!({ stream: e.target.value })
+              ? setSchema(values, set, "stream", e.target.value)
               : mark("adapterConfig", "stream", e.target.value === "true")
           }
           className={inputClass}
@@ -159,7 +176,7 @@ export function OpenRouterConfigFields({
           value={reasoningValue}
           onChange={(e) =>
             isCreate
-              ? set!({ reasoning: e.target.value })
+              ? setSchema(values, set, "reasoning", e.target.value)
               : mark("adapterConfig", "reasoning", e.target.value === "true")
           }
           className={inputClass}
