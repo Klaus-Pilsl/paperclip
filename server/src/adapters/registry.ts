@@ -136,6 +136,18 @@ import {
   agentConfigurationDoc as hermesAgentConfigurationDoc,
   models as hermesModels,
 } from "hermes-paperclip-adapter";
+import {
+  execute as openrouterExecute,
+  testEnvironment as openrouterTestEnvironment,
+  sessionCodec as openrouterSessionCodec,
+  listSkills as openrouterListSkills,
+  syncSkills as openrouterSyncSkills,
+} from "@paperclipai/adapter-openrouter/server";
+import {
+  agentConfigurationDoc as openrouterAgentConfigurationDoc,
+  models as openrouterModels,
+  type as openrouterType,
+} from "@paperclipai/adapter-openrouter";
 import { BUILTIN_ADAPTER_TYPES } from "./builtin-adapter-types.js";
 import { buildExternalAdapters } from "./plugin-loader.js";
 import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
@@ -497,6 +509,21 @@ const hermesLocalAdapter: ServerAdapterModule = {
   detectModel: () => detectModelFromHermes(),
 };
 
+const openrouterAdapter: ServerAdapterModule = {
+  type: openrouterType,
+  execute: openrouterExecute,
+  testEnvironment: openrouterTestEnvironment,
+  sessionCodec: openrouterSessionCodec,
+  listSkills: openrouterListSkills,
+  syncSkills: openrouterSyncSkills,
+  models: openrouterModels,
+  supportsLocalAgentJwt: false,
+  supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath",
+  requiresMaterializedRuntimeSkills: false,
+  agentConfigurationDoc: openrouterAgentConfigurationDoc,
+};
+
 const adaptersByType = new Map<string, ServerAdapterModule>();
 
 // For builtin types that are overridden by an external adapter, we keep the
@@ -520,6 +547,7 @@ function registerBuiltInAdapters() {
     geminiLocalAdapter,
     grokLocalAdapter,
     openclawGatewayAdapter,
+    openrouterAdapter,
     hermesLocalAdapter,
     processAdapter,
     httpAdapter,

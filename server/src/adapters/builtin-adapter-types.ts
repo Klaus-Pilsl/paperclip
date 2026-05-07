@@ -11,6 +11,7 @@ export const BUILTIN_ADAPTER_TYPES = new Set([
   "grok_local",
   "openclaw_gateway",
   "opencode_local",
+  "openrouter",
   "pi_local",
   "hermes_local",
   "process",

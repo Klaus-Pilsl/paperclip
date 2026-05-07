@@ -9,6 +9,7 @@ import { printGrokStreamEvent } from "@paperclipai/adapter-grok-local/cli";
 import { printOpenCodeStreamEvent } from "@paperclipai/adapter-opencode-local/cli";
 import { printPiStreamEvent } from "@paperclipai/adapter-pi-local/cli";
 import { printOpenClawGatewayStreamEvent } from "@paperclipai/adapter-openclaw-gateway/cli";
+import { formatEvent as openrouterFormatEvent } from "@paperclipai/adapter-openrouter/cli";
 import { processCLIAdapter } from "./process/index.js";
 import { httpCLIAdapter } from "./http/index.js";
 
@@ -62,6 +63,14 @@ const openclawGatewayCLIAdapter: CLIAdapterModule = {
   formatStdoutEvent: printOpenClawGatewayStreamEvent,
 };
 
+const openrouterCLIAdapter: CLIAdapterModule = {
+  type: "openrouter",
+  formatStdoutEvent: (line, _debug) => {
+    const output = openrouterFormatEvent(line);
+    if (output !== null) process.stdout.write(output);
+  },
+};
+
 const adaptersByType = new Map<string, CLIAdapterModule>(
   [
     acpxLocalCLIAdapter,
@@ -74,6 +83,7 @@ const adaptersByType = new Map<string, CLIAdapterModule>(
     geminiLocalCLIAdapter,
     grokLocalCLIAdapter,
     openclawGatewayCLIAdapter,
+    openrouterCLIAdapter,
     processCLIAdapter,
     httpCLIAdapter,
   ].map((a) => [a.type, a]),
