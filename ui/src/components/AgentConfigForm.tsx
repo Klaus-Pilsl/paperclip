@@ -945,82 +945,86 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
             : <div className="px-4 py-2 text-xs font-medium text-muted-foreground">Permissions &amp; Configuration</div>
           }
           <div className={cn(cards ? "border border-border rounded-lg p-4 space-y-3" : "px-4 pb-3 space-y-3")}>
-              <Field label="Command" hint={help.localCommand}>
-                <DraftInput
-                  value={
-                    isCreate
-                      ? val!.command
-                      : eff(
-                          "adapterConfig",
-                          adapterCommandField,
-                          String(
-                            (adapterType === "hermes_local"
-                              ? config.hermesCommand ?? config.command
-                              : config.command) ?? "",
-                          ),
-                        )
-                  }
-                  onCommit={(v) =>
-                    isCreate
-                      ? set!({ command: v })
-                      : mark("adapterConfig", adapterCommandField, v || null)
-                  }
-                  immediate
-                  className={inputClass}
-                  placeholder={
-                    ({
-                      claude_local: "claude",
-                      codex_local: "codex",
-                      gemini_local: "gemini",
-                      pi_local: "pi",
-                      cursor: "agent",
-                      opencode_local: "opencode",
-                    } as Record<string, string>)[adapterType] ?? adapterType.replace(/_local$/, "")
-                  }
-                />
-              </Field>
+              {!uiAdapter.rendersOwnPrimaryFields && (
+                <>
+                  <Field label="Command" hint={help.localCommand}>
+                    <DraftInput
+                      value={
+                        isCreate
+                          ? val!.command
+                          : eff(
+                              "adapterConfig",
+                              adapterCommandField,
+                              String(
+                                (adapterType === "hermes_local"
+                                  ? config.hermesCommand ?? config.command
+                                  : config.command) ?? "",
+                              ),
+                            )
+                      }
+                      onCommit={(v) =>
+                        isCreate
+                          ? set!({ command: v })
+                          : mark("adapterConfig", adapterCommandField, v || null)
+                      }
+                      immediate
+                      className={inputClass}
+                      placeholder={
+                        ({
+                          claude_local: "claude",
+                          codex_local: "codex",
+                          gemini_local: "gemini",
+                          pi_local: "pi",
+                          cursor: "agent",
+                          opencode_local: "opencode",
+                        } as Record<string, string>)[adapterType] ?? adapterType.replace(/_local$/, "")
+                      }
+                    />
+                  </Field>
 
-              {supportsModelProfiles && (
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Primary model</div>
-              )}
-              <ModelDropdown
-                models={models}
-                value={currentModelId}
-                onChange={(v) =>
-                  isCreate
-                    ? set!({ model: v })
-                    : mark("adapterConfig", "model", v || undefined)
-                }
-                open={modelOpen}
-                onOpenChange={setModelOpen}
-                allowDefault={adapterType !== "opencode_local"}
-                required={adapterType === "opencode_local"}
-                groupByProvider={adapterType === "opencode_local"}
-                creatable
-                detectedModel={detectedModel}
-                detectedModelCandidates={[]}
-                onDetectModel={adapterType === "opencode_local"
-                  ? undefined
-                  : async () => {
-                      const result = await refetchDetectedModel();
-                      return result.data?.model ?? null;
-                    }}
-                onRefreshModels={
-                  adapterType === "codex_local" || adapterType === "acpx_local"
-                    ? handleRefreshModels
-                    : undefined
-                }
-                refreshingModels={refreshingModels}
-                detectModelLabel="Detect model"
-                emptyDetectHint="No model detected. Select or enter one manually."
-              />
-              {(refreshModelsError || fetchedModelsError) && (
-                <p className="text-xs text-destructive">
-                  {refreshModelsError
-                    ?? (fetchedModelsError instanceof Error
-                      ? fetchedModelsError.message
-                      : "Failed to load adapter models.")}
-                </p>
+                  {supportsModelProfiles && (
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Primary model</div>
+                  )}
+                  <ModelDropdown
+                    models={models}
+                    value={currentModelId}
+                    onChange={(v) =>
+                      isCreate
+                        ? set!({ model: v })
+                        : mark("adapterConfig", "model", v || undefined)
+                    }
+                    open={modelOpen}
+                    onOpenChange={setModelOpen}
+                    allowDefault={adapterType !== "opencode_local"}
+                    required={adapterType === "opencode_local"}
+                    groupByProvider={adapterType === "opencode_local"}
+                    creatable
+                    detectedModel={detectedModel}
+                    detectedModelCandidates={[]}
+                    onDetectModel={adapterType === "opencode_local"
+                      ? undefined
+                      : async () => {
+                          const result = await refetchDetectedModel();
+                          return result.data?.model ?? null;
+                        }}
+                    onRefreshModels={
+                      adapterType === "codex_local" || adapterType === "acpx_local"
+                        ? handleRefreshModels
+                        : undefined
+                    }
+                    refreshingModels={refreshingModels}
+                    detectModelLabel="Detect model"
+                    emptyDetectHint="No model detected. Select or enter one manually."
+                  />
+                  {(refreshModelsError || fetchedModelsError) && (
+                    <p className="text-xs text-destructive">
+                      {refreshModelsError
+                        ?? (fetchedModelsError instanceof Error
+                          ? fetchedModelsError.message
+                          : "Failed to load adapter models.")}
+                    </p>
+                  )}
+                </>
               )}
               {adapterType === "opencode_local"
                 && currentDefaultEnvironment

@@ -41,4 +41,11 @@ export interface UIAdapterModule extends TranscriptParserSource {
   label: string;
   ConfigFields: ComponentType<AdapterConfigFieldsProps>;
   buildAdapterConfig: (values: CreateConfigValues) => Record<string, unknown>;
+  /**
+   * When true, AgentConfigForm hides its generic Command field and
+   * ModelDropdown for this adapter — the adapter's own ConfigFields renders
+   * those (e.g. OpenRouter has its own model select tied to the same
+   * adapterConfig.model key).
+   */
+  rendersOwnPrimaryFields?: boolean;
 }

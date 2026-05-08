@@ -1654,6 +1654,8 @@ function ConfigurationTab({
   hideInstructionsFile?: boolean;
 }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { agentId: urlAgentRef, tab: urlTab } = useParams<{ agentId?: string; tab?: string }>();
   const { pushToast } = useToastActions();
   const [awaitingRefreshAfterSave, setAwaitingRefreshAfterSave] = useState(false);
   const lastAgentRef = useRef(agent);
@@ -1672,11 +1674,18 @@ function ConfigurationTab({
     onMutate: () => {
       setAwaitingRefreshAfterSave(true);
     },
-    onSuccess: () => {
+    onSuccess: (updatedAgent) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.urlKey) });
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.configRevisions(agent.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(agent.companyId) });
+      // If a rename changed the agent's urlKey, the page is now sitting on a
+      // stale slug whose query returns 404 ("Agent not found"). Redirect to
+      // the new slug so the refetch lands on a valid route.
+      const newRef = agentRouteRef(updatedAgent);
+      if (urlAgentRef && newRef !== urlAgentRef) {
+        navigate(`/agents/${newRef}/${urlTab ?? "configuration"}`, { replace: true });
+      }
     },
     onError: (err) => {
       setAwaitingRefreshAfterSave(false);

@@ -23,6 +23,9 @@ export const openrouterUIAdapter: UIAdapterModule = {
   label,
   parseStdoutLine,
   ConfigFields: OpenRouterConfigFields,
+  // OpenRouter ships its own API Key + Model fields inside ConfigFields, so
+  // the generic Command/Model row in AgentConfigForm would just be a duplicate.
+  rendersOwnPrimaryFields: true,
   buildAdapterConfig: (values) => {
     const schema = (values.adapterSchemaValues ?? {}) as Record<string, unknown>;
     return buildConfig({
