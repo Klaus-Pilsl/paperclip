@@ -89,8 +89,26 @@ function defaultSkillsRoot(): string {
   return path.join(home, ".openrouter-adapter", "skills");
 }
 
+const SKILLS_README = `# OpenRouter adapter skills
+
+This folder is **optional**. Drop one subdirectory per skill, each containing a
+\`SKILL.md\` file:
+
+    ~/.openrouter-adapter/skills/
+      my-skill/
+        SKILL.md      # markdown describing the skill
+
+The OpenRouter adapter reads every \`SKILL.md\` here and prepends it to the
+agent's system prompt at runtime.
+
+Override the location by setting the \`PAPERCLIP_SKILLS_DIR\` environment
+variable, or per-agent by setting \`adapterConfig.skillsDir\` on the agent.
+`;
+
 export async function listSkills(_ctx: AdapterSkillContext): Promise<AdapterSkillSnapshot> {
-  const root = process.env.PAPERCLIP_SKILLS_DIR?.trim() || defaultSkillsRoot();
+  const envOverride = process.env.PAPERCLIP_SKILLS_DIR?.trim();
+  const isDefault = !envOverride;
+  const root = envOverride || defaultSkillsRoot();
   const snapshot: AdapterSkillSnapshot = {
     adapterType: "openrouter",
     supported: true,
@@ -104,8 +122,23 @@ export async function listSkills(_ctx: AdapterSkillContext): Promise<AdapterSkil
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
   } catch {
-    snapshot.warnings.push(`Skills root ${root} not present.`);
-    return snapshot;
+    if (!isDefault) {
+      snapshot.warnings.push(`Skills root ${root} not present.`);
+      return snapshot;
+    }
+    try {
+      await fs.mkdir(root, { recursive: true });
+      const readmePath = path.join(root, "README.md");
+      try {
+        await fs.access(readmePath);
+      } catch {
+        await fs.writeFile(readmePath, SKILLS_README, "utf8");
+      }
+      entries = await fs.readdir(root, { withFileTypes: true });
+    } catch {
+      snapshot.warnings.push(`Skills root ${root} not present.`);
+      return snapshot;
+    }
   }
 
   for (const entry of entries) {

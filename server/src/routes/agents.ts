@@ -1043,6 +1043,21 @@ export function agentRoutes(
     return ensureGatewayDeviceKey(adapterType, next);
   }
 
+  async function inheritModelFromHiringAgent(
+    adapterType: string | null | undefined,
+    adapterConfig: Record<string, unknown>,
+    hiringAgentId: string | null,
+  ): Promise<Record<string, unknown>> {
+    if (asNonEmptyString(adapterConfig.model)) return adapterConfig;
+    if (!hiringAgentId || !adapterType) return adapterConfig;
+    const hiringAgent = await svc.getById(hiringAgentId);
+    if (!hiringAgent || hiringAgent.adapterType !== adapterType) return adapterConfig;
+    const hiringConfig = (hiringAgent.adapterConfig ?? {}) as Record<string, unknown>;
+    const hiringModel = asNonEmptyString(hiringConfig.model);
+    if (!hiringModel) return adapterConfig;
+    return { ...adapterConfig, model: hiringModel };
+  }
+
   async function assertAdapterConfigConstraints(
     adapterType: string | null | undefined,
     adapterConfig: Record<string, unknown>,
@@ -1971,9 +1986,12 @@ export function agentRoutes(
     );
     assertNoAgentAdapterConfigMutation(req, rawHireAdapterConfig);
     assertNoAgentRuntimeConfigAdapterConfigMutation(req, hireInput.runtimeConfig);
-    const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
+    const actor = getActorInfo(req);
+    const hiringAgentId = actor.actorType === "agent" ? actor.actorId : null;
+    const requestedAdapterConfig = await inheritModelFromHiringAgent(
       hireInput.adapterType,
-      rawHireAdapterConfig,
+      applyCreateDefaultsByAdapterType(hireInput.adapterType, rawHireAdapterConfig),
+      hiringAgentId,
     );
     const desiredSkillAssignment = await resolveDesiredSkillAssignment(
       companyId,
@@ -2019,7 +2037,6 @@ export function agentRoutes(
     const agent = await materializeDefaultInstructionsBundleForNewAgent(createdAgent, instructionsBundle);
 
     let approval: Awaited<ReturnType<typeof approvalsSvc.getById>> | null = null;
-    const actor = getActorInfo(req);
 
     if (requiresApproval) {
       const requestedAdapterType = normalizedHireInput.adapterType ?? agent.adapterType;
@@ -2157,9 +2174,12 @@ export function agentRoutes(
     );
     assertNoAgentAdapterConfigMutation(req, rawCreateAdapterConfig);
     assertNoAgentRuntimeConfigAdapterConfigMutation(req, createInput.runtimeConfig);
-    const requestedAdapterConfig = applyCreateDefaultsByAdapterType(
+    const createActor = getActorInfo(req);
+    const createHiringAgentId = createActor.actorType === "agent" ? createActor.actorId : null;
+    const requestedAdapterConfig = await inheritModelFromHiringAgent(
       createInput.adapterType,
-      rawCreateAdapterConfig,
+      applyCreateDefaultsByAdapterType(createInput.adapterType, rawCreateAdapterConfig),
+      createHiringAgentId,
     );
     const desiredSkillAssignment = await resolveDesiredSkillAssignment(
       companyId,
@@ -2202,7 +2222,7 @@ export function agentRoutes(
       );
     }
 
-    const actor = getActorInfo(req);
+    const actor = createActor;
     await logActivity(db, {
       companyId,
       actorType: actor.actorType,

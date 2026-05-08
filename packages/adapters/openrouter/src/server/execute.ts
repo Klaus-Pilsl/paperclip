@@ -30,7 +30,6 @@ import {
 
 import {
   OPENROUTER_CHAT_ENDPOINT,
-  OPENROUTER_GENERATION_ENDPOINT,
   type OpenRouterConfig,
 } from "../index.js";
 import { PaperclipApi, PaperclipApiError } from "./paperclip-api.js";
@@ -81,6 +80,7 @@ interface ChatCompletionResponse {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
+    cost?: number;
   };
 }
 
@@ -155,6 +155,9 @@ async function callOpenRouter(
     temperature: config.temperature ?? 0.7,
     top_p: config.topP ?? 1,
     stream: false,
+    // Ask OpenRouter to include per-generation cost in the response so we can
+    // sum it accurately across multi-turn runs without a separate /generation lookup.
+    usage: { include: true },
   };
   if (tools.length > 0) {
     body.tools = toolSchemas(tools);
@@ -175,32 +178,13 @@ async function callOpenRouter(
     throw new Error(`OpenRouter API error (${response.status}): ${errText}`);
   }
 
-  const json = (await response.json()) as ChatCompletionResponse;
-  return json;
-}
-
-async function fetchGenerationCost(
-  generationId: string,
-  apiKey: string,
-): Promise<{ costUsd: number | null; inputTokens: number; outputTokens: number }> {
-  const fallback = { costUsd: null as number | null, inputTokens: 0, outputTokens: 0 };
-  try {
-    // OpenRouter's /generation endpoint takes a moment to populate.
-    await new Promise((r) => setTimeout(r, 1500));
-    const res = await fetch(`${OPENROUTER_GENERATION_ENDPOINT}?id=${encodeURIComponent(generationId)}`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    if (!res.ok) return fallback;
-    const data = (await res.json()) as { data?: Record<string, unknown> };
-    const d = data.data ?? {};
-    return {
-      costUsd: typeof d.total_cost === "number" ? d.total_cost : null,
-      inputTokens: typeof d.tokens_prompt === "number" ? d.tokens_prompt : 0,
-      outputTokens: typeof d.tokens_completion === "number" ? d.tokens_completion : 0,
-    };
-  } catch {
-    return fallback;
+  const json = (await response.json()) as ChatCompletionResponse & { error?: { message?: string; code?: unknown } };
+  // OpenRouter sometimes returns HTTP 200 with an error object instead of choices.
+  if (json.error) {
+    const msg = typeof json.error.message === "string" ? json.error.message : JSON.stringify(json.error);
+    throw new Error(`OpenRouter error: ${msg}`);
   }
+  return json;
 }
 
 // ----- main -----
@@ -379,6 +363,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   let lastGenerationId: string | undefined;
   let totalUsage: UsageSummary = { inputTokens: 0, outputTokens: 0 };
+  // Track per-turn cost reported inline by OpenRouter (usage.cost). Stays null
+  // until at least one turn reports a number; that lets us distinguish "the run
+  // was free" (some turn reported 0) from "OpenRouter never told us" (null).
+  let totalCostUsd: number | null = null;
   let finalAssistantText = "";
   let turn = 0;
   let stoppedReason: "completed" | "max_turns" | "error" | "repeat_loop" = "completed";
@@ -409,11 +397,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           inputTokens: totalUsage.inputTokens + (response.usage.prompt_tokens ?? 0),
           outputTokens: totalUsage.outputTokens + (response.usage.completion_tokens ?? 0),
         };
+        if (typeof response.usage.cost === "number" && Number.isFinite(response.usage.cost)) {
+          totalCostUsd = (totalCostUsd ?? 0) + response.usage.cost;
+        }
       }
 
       const choice = response.choices?.[0];
       if (!choice) {
-        runError = { message: "OpenRouter returned no choices", code: "openrouter_empty_response" };
+        const detail = JSON.stringify(response).slice(0, 400);
+        runError = { message: `OpenRouter returned no choices. Raw response: ${detail}`, code: "openrouter_empty_response" };
         stoppedReason = "error";
         break;
       }
@@ -521,14 +513,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   // ----- post-loop: cost, comment, status -----
 
-  let costUsd: number | null = null;
-  if (lastGenerationId) {
-    const cost = await fetchGenerationCost(lastGenerationId, apiKey);
-    costUsd = cost.costUsd;
-    // Prefer the generation endpoint's token counts when present (more accurate).
-    if (cost.inputTokens > 0 || cost.outputTokens > 0) {
-      totalUsage = { inputTokens: cost.inputTokens, outputTokens: cost.outputTokens };
-    }
+  // costUsd is the sum of per-turn `usage.cost` values reported inline by
+  // OpenRouter (we set `usage: { include: true }` on every request). It stays
+  // null only when no turn reported a cost — which lets the run summary surface
+  // "unknown" instead of a misleading $0.
+  const costUsd: number | null = totalCostUsd;
+  if (costUsd === null && lastGenerationId) {
+    await writeRawStderr(
+      onLog,
+      `[openrouter] cost not reported by any turn (last generation: ${lastGenerationId}); leaving costUsd as null`,
+    );
   }
 
   // Post the final assistant text as a comment so other agents can see it.

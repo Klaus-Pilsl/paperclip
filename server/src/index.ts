@@ -1,5 +1,6 @@
 /// <reference path="./types/express.d.ts" />
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -405,6 +406,27 @@ export async function startServer(): Promise<StartedServer> {
         }
 
         if (existsSync(postmasterPidFile)) {
+          let stalePid: number | undefined;
+          try {
+            const content = readFileSync(postmasterPidFile, "utf-8");
+            const parsed = parseInt(content.split("\n")[0] ?? "", 10);
+            if (Number.isFinite(parsed) && parsed > 0) stalePid = parsed;
+          } catch { /* ignore */ }
+
+          if (stalePid !== undefined) {
+            logger.warn(`Killing stale embedded PostgreSQL process (pid=${stalePid})`);
+            await new Promise<void>((res) => {
+              if (process.platform === "win32") {
+                const tk = spawn("taskkill", ["/pid", String(stalePid), "/f", "/t"]);
+                tk.on("close", () => res());
+              } else {
+                try { process.kill(stalePid as number, "SIGTERM"); } catch { /* ignore */ }
+                res();
+              }
+            });
+            await new Promise((res) => setTimeout(res, 600));
+          }
+
           logger.warn("Removing stale embedded PostgreSQL lock file");
           rmSync(postmasterPidFile, { force: true });
         }

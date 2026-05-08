@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import path from "node:path";
 import { ensurePostgresDatabase, getPostgresDataDirectory } from "./client.js";
@@ -157,6 +158,25 @@ async function ensureEmbeddedPostgresConnection(
     }
   }
   if (existsSync(postmasterPidFile)) {
+    let stalePid: number | undefined;
+    try {
+      const parsed = Number(readFileSync(postmasterPidFile, "utf8").split("\n")[0]?.trim());
+      if (Number.isInteger(parsed) && parsed > 0) stalePid = parsed;
+    } catch { /* ignore */ }
+
+    if (stalePid !== undefined) {
+      await new Promise<void>((res) => {
+        if (process.platform === "win32") {
+          const tk = spawn("taskkill", ["/pid", String(stalePid), "/f", "/t"]);
+          tk.on("close", () => res());
+        } else {
+          try { process.kill(stalePid as number, "SIGTERM"); } catch { /* ignore */ }
+          res();
+        }
+      });
+      await new Promise((res) => setTimeout(res, 600));
+    }
+
     rmSync(postmasterPidFile, { force: true });
   }
   try {

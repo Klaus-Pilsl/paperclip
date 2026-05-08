@@ -517,7 +517,7 @@ const openrouterAdapter: ServerAdapterModule = {
   listSkills: openrouterListSkills,
   syncSkills: openrouterSyncSkills,
   models: openrouterModels,
-  supportsLocalAgentJwt: false,
+  supportsLocalAgentJwt: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: false,
