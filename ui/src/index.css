@@ -171,6 +171,13 @@
   .paperclip-mdxeditor-content {
     font-family: inherit;
   }
+  /* Native <select> popup options inherit no theme by default — Chromium/Edge
+     ignore color-scheme for the option list. Without this, dark-mode users
+     see white text on white background. */
+  select option {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
+  }
 }
 
 @media (pointer: coarse) {
