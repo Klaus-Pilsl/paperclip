@@ -31,6 +31,7 @@ COPY packages/adapters/gemini-local/package.json packages/adapters/gemini-local/
 COPY packages/adapters/grok-local/package.json packages/adapters/grok-local/
 COPY packages/adapters/openclaw-gateway/package.json packages/adapters/openclaw-gateway/
 COPY packages/adapters/opencode-local/package.json packages/adapters/opencode-local/
+COPY packages/adapters/openrouter/package.json packages/adapters/openrouter/
 COPY packages/adapters/pi-local/package.json packages/adapters/pi-local/
 COPY packages/plugins/sdk/package.json packages/plugins/sdk/
 COPY --parents packages/plugins/sandbox-providers/./*/package.json packages/plugins/sandbox-providers/
