@@ -29,9 +29,15 @@ fail()  { color "1;31" "[X]  $*"; exit 1; }
 
 OS="$(uname -s)"
 case "$OS" in
-  Linux)  PLATFORM="linux"  ;;
-  Darwin) PLATFORM="macos"  ;;
-  *)      fail "Unsupported OS: $OS. Nur Linux und macOS werden unterstuetzt." ;;
+  Linux)             PLATFORM="linux"  ;;
+  Darwin)            PLATFORM="macos"  ;;
+  MINGW*|MSYS*|CYGWIN*)
+    fail "Du fuehrst dieses Skript in Git-Bash/MSYS aus. Auf Windows bitte das PowerShell-Skript verwenden:
+
+    iwr -useb https://raw.githubusercontent.com/Klaus-Pilsl/paperclip/addons/scripts/install-customer.ps1 | iex
+
+  Alternativ in einer WSL2-Ubuntu-Shell den urspruenglichen curl|bash-Befehl ausfuehren." ;;
+  *)                 fail "Unsupported OS: $OS. Unterstuetzt werden Linux, macOS (Bash) und Windows (PowerShell-Skript)." ;;
 esac
 info "Platform: $PLATFORM"
 
