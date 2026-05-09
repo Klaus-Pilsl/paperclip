@@ -6,32 +6,11 @@
 export const type = "openrouter" as const;
 export const label = "OpenRouter";
 
-// ── Static fallback models (shown when API is unreachable) ──────
+// Static fallback shown only when the live /models call fails (no API key,
+// no network). The real list comes from listOpenRouterModels() at runtime —
+// hardcoded slugs rot fast and were the source of "model not found" errors.
 export const models = [
-  // Free tier
-  { id: "openrouter/auto",                       label: "Auto (best free route)" },
-  { id: "meta-llama/llama-4-maverick:free",       label: "Llama 4 Maverick (free)" },
-  { id: "meta-llama/llama-4-scout:free",          label: "Llama 4 Scout (free)" },
-  { id: "google/gemma-3-27b-it:free",             label: "Gemma 3 27B (free)" },
-  { id: "deepseek/deepseek-chat-v3-0324:free",    label: "DeepSeek V3 0324 (free)" },
-  { id: "qwen/qwen3-235b-a22b:free",              label: "Qwen3 235B (free)" },
-  { id: "mistralai/mistral-small-3.2-24b-instruct:free", label: "Mistral Small 3.2 (free)" },
-
-  // Paid — frontier
-  { id: "anthropic/claude-sonnet-4-6",            label: "Claude Sonnet 4.6" },
-  { id: "anthropic/claude-opus-4-6",              label: "Claude Opus 4.6" },
-  { id: "openai/gpt-4.1",                        label: "GPT-4.1" },
-  { id: "openai/o4-mini",                         label: "o4-mini" },
-  { id: "google/gemini-2.5-pro-preview",          label: "Gemini 2.5 Pro" },
-  { id: "google/gemini-2.5-flash-preview",        label: "Gemini 2.5 Flash" },
-  { id: "deepseek/deepseek-r1",                   label: "DeepSeek R1" },
-  { id: "meta-llama/llama-4-maverick",            label: "Llama 4 Maverick" },
-
-  // Paid — mid-tier
-  { id: "anthropic/claude-haiku-4-5",             label: "Claude Haiku 4.5" },
-  { id: "openai/gpt-4.1-mini",                   label: "GPT-4.1 Mini" },
-  { id: "mistralai/mistral-medium-3",             label: "Mistral Medium 3" },
-  { id: "qwen/qwen3-235b-a22b",                  label: "Qwen3 235B" },
+  { id: "openrouter/auto", label: "Auto (best free route)" },
 ];
 
 // ── OpenRouter API constants ────────────────────────────────────

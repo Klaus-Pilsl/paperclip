@@ -142,6 +142,7 @@ import {
   sessionCodec as openrouterSessionCodec,
   listSkills as openrouterListSkills,
   syncSkills as openrouterSyncSkills,
+  listOpenRouterModels,
 } from "@paperclipai/adapter-openrouter/server";
 import {
   agentConfigurationDoc as openrouterAgentConfigurationDoc,
@@ -517,6 +518,7 @@ const openrouterAdapter: ServerAdapterModule = {
   listSkills: openrouterListSkills,
   syncSkills: openrouterSyncSkills,
   models: openrouterModels,
+  listModels: listOpenRouterModels,
   supportsLocalAgentJwt: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
