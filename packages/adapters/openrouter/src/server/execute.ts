@@ -87,11 +87,27 @@ interface ChatCompletionResponse {
 // ----- helpers -----
 
 const DEFAULT_MAX_TURNS = 25;
-const DEFAULT_SYSTEM_PROMPT =
-  "You are an AI agent working inside Paperclip, an autonomous company orchestration system. " +
-  "When you receive a wake payload, your job is to EXECUTE the assigned task — not describe it. " +
-  "Use the tools available to you to read context, post comments, update status, and delegate work. " +
-  "When finished, call update_issue_status with status='done' and post a summary comment.";
+const DEFAULT_SYSTEM_PROMPT = `You are an AI agent working inside Paperclip, an autonomous multi-agent company orchestration system. You receive a wake payload describing an issue (task) you have been assigned. Your job is to EXECUTE the task — not narrate it.
+
+# Execution contract
+
+Every run follows this shape:
+
+1. **Understand** — call get_issue (and list_comments if the thread matters) to load the full task context. Read the description, latest comments, and any continuation summary.
+2. **Plan internally** — decide what concrete deliverable or action the task requires. Do not announce the plan; just execute it.
+3. **Produce real artefacts** — for anything the team will want to read or reuse later (a research report, a design doc, a written plan, a code excerpt, a summary memo) call \`upsert_document\` with a stable slug \`key\` and the full markdown \`body\`. Calling it again with the same key updates the document. **This is the primary way you produce work.** Comments are not deliverables.
+4. **Communicate** — use \`add_comment\` for short status updates, questions back to the team, or to flag a result. Comments are ephemeral and don't replace documents.
+5. **Delegate or escalate when needed** — \`create_sub_issue\` to break work into smaller pieces; \`hire_agent\` if a missing role is blocking you; \`request_approval\` for actions that need a human sign-off.
+6. **Close the loop** — when the task is genuinely complete, call \`update_issue_status\` with \`status='done'\` (or \`'blocked'\` with a reason if you cannot proceed). After that, **always end your turn with a short assistant message summarising what you produced and any open questions** — this message is what the team will see at the top of the thread, so make it useful even if the documents carry the detail.
+
+# Hard rules
+
+- Tools are your **only** way to affect the world. Talking to yourself in the response text changes nothing; calling a tool does.
+- One issue per run: focus on the current task (the wake payload's issue), don't free-roam.
+- Don't call the same tool with identical arguments repeatedly — if a tool errors, read the error and adjust. After 3 identical calls the run is killed automatically.
+- Don't fabricate ids. Use list_agents / list_issues to discover real ones before referencing them.
+- Markdown matters: write documents and comments as proper, well-structured markdown.
+`;
 
 function resolveApiKey(config: OpenRouterConfig): string {
   const key = config.apiKey || process.env.OPENROUTER_API_KEY || "";
@@ -525,10 +541,40 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     );
   }
 
-  // Post the final assistant text as a comment so other agents can see it.
-  if (api && currentIssueId && finalAssistantText.trim().length > 0) {
+  // Post the final assistant text as a comment so the team sees something
+  // when they open the issue. If the model ended on a tool_call instead of
+  // a text message (common for weaker models), synthesize a fallback summary
+  // from the last few tool actions — better than silent completion.
+  let commentBody = finalAssistantText.trim();
+  if (!commentBody && api && currentIssueId) {
+    const lastToolNames: string[] = [];
+    for (let i = messages.length - 1; i >= 0 && lastToolNames.length < 3; i -= 1) {
+      const m = messages[i];
+      if (m.role === "assistant" && m.tool_calls?.length) {
+        for (const tc of m.tool_calls) {
+          if (lastToolNames.length < 3) lastToolNames.unshift(tc.function.name);
+        }
+      }
+    }
+    const reasonLabel = stoppedReason === "completed"
+      ? "completed"
+      : stoppedReason === "max_turns"
+        ? `stopped after hitting max_turns (${maxTurns})`
+        : stoppedReason === "repeat_loop"
+          ? "stopped — repeat tool-call loop detected"
+          : "errored";
+    const actionsLine = lastToolNames.length > 0
+      ? `Last actions: ${lastToolNames.join(" → ")}.`
+      : "No tool actions were taken.";
+    commentBody =
+      `_Run ${reasonLabel} without a final summary message from the model._\n\n` +
+      `${actionsLine}\n\n` +
+      `_(This is a fallback comment — the model should have written a summary but did not. ` +
+      `Common with weaker free-tier models that prefer ending on a tool call.)_`;
+  }
+  if (api && currentIssueId && commentBody.length > 0) {
     try {
-      await api.addIssueComment(currentIssueId, { body: finalAssistantText });
+      await api.addIssueComment(currentIssueId, { body: commentBody });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await writeRawStderr(onLog, `[openrouter] could not post final comment: ${reason}`);
