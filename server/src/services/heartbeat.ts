@@ -96,6 +96,7 @@ import {
   sanitizeRuntimeServiceBaseEnv,
 } from "./workspace-runtime.js";
 import { issueService } from "./issues.js";
+import { agentInstructionsService } from "./agent-instructions.js";
 import {
   buildIssueMonitorClearedPatch,
   buildIssueMonitorTriggeredPatch,
@@ -7767,6 +7768,37 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       };
 
       const adapter = getServerAdapter(agent.adapterType);
+      // Inject the materialized instructions-bundle entry-file path into the
+      // adapter config for adapters that opt in via supportsInstructionsBundle.
+      // CLI adapters historically wired this themselves; HTTP adapters like
+      // openrouter never got the path, so their execute() saw an empty
+      // instructionsFilePath and the model ran without the agent's instructions.
+      if (adapter.supportsInstructionsBundle && adapter.instructionsPathKey) {
+        const key = adapter.instructionsPathKey;
+        const cfg = runtimeConfig as Record<string, unknown>;
+        const existing = cfg[key];
+        if (typeof existing !== "string" || existing.trim().length === 0) {
+          try {
+            const { state } = await agentInstructionsService().ensureManagedBundle(agent);
+            if (state.rootPath && state.entryFile) {
+              runtimeConfig = {
+                ...runtimeConfig,
+                [key]: path.join(state.rootPath, state.entryFile),
+              };
+            }
+          } catch (err) {
+            logger.warn(
+              {
+                agentId: agent.id,
+                runId: run.id,
+                adapterType: agent.adapterType,
+                err: err instanceof Error ? err.message : String(err),
+              },
+              "failed to ensure agent instructions bundle for adapter execution",
+            );
+          }
+        }
+      }
       const authToken = adapter.supportsLocalAgentJwt
         ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)
         : null;
