@@ -169,6 +169,89 @@ function addCommentTool(ctx: BuildToolsContext): Tool {
   };
 }
 
+function upsertDocumentTool(ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "upsert_document",
+        description:
+          "Create or replace a markdown document attached to the issue — the primary way to " +
+          "produce a deliverable (research report, plan, design doc, code excerpt, summary). " +
+          "Each call creates a new revision. Use a slug-style `key` (e.g. 'research-notes', " +
+          "'final-report'); calling again with the same key updates the document. Use this for " +
+          "anything the team will want to read or reuse later. Use add_comment only for short " +
+          "status updates or questions.",
+        parameters: {
+          type: "object",
+          properties: {
+            key: {
+              type: "string",
+              description:
+                "Slug for the document, lowercase letters/numbers/_/- only, 1-64 chars. " +
+                "Example: 'final-report' or 'research_v1'.",
+            },
+            title: { type: "string", description: "Human-readable title (optional)." },
+            body: { type: "string", description: "Full markdown content of the document." },
+            change_summary: {
+              type: "string",
+              description: "Optional one-line note describing what changed in this revision.",
+            },
+            issue_id: { type: "string", description: "Issue id. Omit to use the current issue." },
+          },
+          required: ["key", "body"],
+        },
+      },
+    },
+    execute: async (args) => {
+      const id = asString(args.issue_id, ctx.currentIssueId ?? "");
+      if (!id) return fail("No issue_id supplied and no current issue.");
+      const key = asString(args.key);
+      if (!key) return fail("key is required.");
+      if (!/^[a-z0-9][a-z0-9_-]*$/.test(key) || key.length > 64) {
+        return fail(
+          "Invalid key. Must be 1-64 chars, lowercase letters/numbers/_/-, starting with a letter or digit.",
+        );
+      }
+      const body = asString(args.body);
+      if (!body) return fail("body is required.");
+      return safeCall("upsert_document", () =>
+        ctx.api.upsertIssueDocument(id, key, {
+          title: asString(args.title) || null,
+          body,
+          changeSummary: asString(args.change_summary) || null,
+        }),
+      );
+    },
+  };
+}
+
+function listDocumentsTool(ctx: BuildToolsContext): Tool {
+  return {
+    schema: {
+      type: "function",
+      function: {
+        name: "list_documents",
+        description:
+          "List all markdown documents attached to an issue (slug, title, latest revision). " +
+          "Use this before upsert_document to discover existing keys you may want to update " +
+          "instead of creating duplicates.",
+        parameters: {
+          type: "object",
+          properties: {
+            issue_id: { type: "string", description: "Issue id. Omit to use the current issue." },
+          },
+        },
+      },
+    },
+    execute: async (args) => {
+      const id = asString(args.issue_id, ctx.currentIssueId ?? "");
+      if (!id) return fail("No issue_id supplied and no current issue.");
+      return safeCall("list_documents", () => ctx.api.listIssueDocuments(id));
+    },
+  };
+}
+
 function listCommentsTool(ctx: BuildToolsContext): Tool {
   return {
     schema: {
@@ -396,6 +479,8 @@ export function buildTools(ctx: BuildToolsContext): Tool[] {
   return [
     getIssueTool(ctx),
     updateIssueStatusTool(ctx),
+    upsertDocumentTool(ctx),
+    listDocumentsTool(ctx),
     addCommentTool(ctx),
     listCommentsTool(ctx),
     createSubIssueTool(ctx),

@@ -169,6 +169,35 @@ export class PaperclipApi {
     return this.request("POST", `/api/issues/${encodeURIComponent(issueId)}/comments`, body);
   }
 
+  // ----- Documents (issue-attached markdown artifacts) -----
+
+  /**
+   * Upsert a markdown document on an issue. The document key is a slug
+   * (lowercase, [a-z0-9_-], <=64 chars). Body is markdown, max 512 KiB.
+   * Creates a new revision each call. Used by the upsert_document tool to
+   * let agents produce real deliverables, not just comments.
+   */
+  upsertIssueDocument(
+    issueId: string,
+    key: string,
+    payload: { title?: string | null; body: string; changeSummary?: string | null },
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      "PUT",
+      `/api/issues/${encodeURIComponent(issueId)}/documents/${encodeURIComponent(key)}`,
+      {
+        title: payload.title ?? null,
+        format: "markdown",
+        body: payload.body,
+        changeSummary: payload.changeSummary ?? null,
+      },
+    );
+  }
+
+  listIssueDocuments(issueId: string): Promise<Record<string, unknown>> {
+    return this.request("GET", `/api/issues/${encodeURIComponent(issueId)}/documents`);
+  }
+
   // ----- Agents -----
 
   /**
