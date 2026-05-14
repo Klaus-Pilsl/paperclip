@@ -35,6 +35,7 @@ import {
 import { PaperclipApi, PaperclipApiError } from "./paperclip-api.js";
 import { buildTools, toolSchemas, findTool, type Tool } from "./tools.js";
 import { loadSkills, renderSkillsForPrompt } from "./skills.js";
+import * as rateLimitRegistry from "./rate-limit-registry.js";
 import {
   emitInit,
   emitAssistant,
@@ -87,6 +88,76 @@ interface ChatCompletionResponse {
 // ----- helpers -----
 
 const DEFAULT_MAX_TURNS = 25;
+const RATE_LIMIT_FALLBACK_SECONDS = 60;
+
+/**
+ * Typed signal that the OpenRouter API rate-limited a request. Carries the
+ * reset timestamp so the adapter can short-circuit subsequent runs via the
+ * rate-limit registry and surface a transient-upstream retry hint to the
+ * heartbeat scheduler.
+ */
+class RateLimitedError extends Error {
+  readonly resetAtMs: number;
+  readonly reason: string;
+  constructor(resetAtMs: number, reason: string) {
+    super(`Rate-limited until ${new Date(resetAtMs).toISOString()}: ${reason}`);
+    this.name = "RateLimitedError";
+    this.resetAtMs = resetAtMs;
+    this.reason = reason;
+  }
+}
+
+/**
+ * Parse a Retry-After value into an absolute reset timestamp (ms).
+ * Accepts either a non-negative numeric seconds delta or an HTTP-date.
+ * Returns null when the value can't be parsed.
+ */
+function parseRetryAfter(value: string | null, nowMs: number): number | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  // Numeric seconds delta (most common).
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    if (Number.isFinite(seconds) && seconds >= 0) return nowMs + seconds * 1000;
+  }
+  // HTTP-date.
+  const dateMs = Date.parse(trimmed);
+  if (Number.isFinite(dateMs) && dateMs > 0) return dateMs;
+  return null;
+}
+
+/**
+ * Parse an X-RateLimit-Reset value into an absolute reset timestamp (ms).
+ * The header is commonly Unix seconds; some providers send Unix ms. We
+ * pick the interpretation by magnitude: values smaller than 1e11 are
+ * treated as seconds (anything < ~5138 CE).
+ */
+function parseRateLimitReset(value: string | null): number | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed || !/^\d+(\.\d+)?$/.test(trimmed)) return null;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < 1e11 ? n * 1000 : n;
+}
+
+/**
+ * Pick the best reset timestamp from response headers + a fallback delta.
+ * Prefers Retry-After (RFC-standard for 429); falls back to X-RateLimit-
+ * Reset; finally to a conservative N-second delta from now. The fallback
+ * is deliberately short — if it's wrong (real limit is hours), we'll get
+ * another 429 right away and the registry auto-corrects with the new
+ * headers, which is cheaper than guessing from the error message body.
+ */
+function resolveRateLimitResetAt(headers: Headers, nowMs: number): number {
+  return (
+    parseRetryAfter(headers.get("retry-after"), nowMs) ??
+    parseRateLimitReset(headers.get("x-ratelimit-reset")) ??
+    nowMs + RATE_LIMIT_FALLBACK_SECONDS * 1000
+  );
+}
+
 const DEFAULT_SYSTEM_PROMPT = `You are an AI agent working inside Paperclip, an autonomous multi-agent company orchestration system. You receive a wake payload describing an issue (task) you have been assigned. Your job is to EXECUTE the task — not narrate it.
 
 # Execution contract
@@ -189,6 +260,15 @@ async function callOpenRouter(
     body: JSON.stringify(body),
   });
 
+  if (response.status === 429) {
+    const errText = await response.text().catch(() => "");
+    const resetAtMs = resolveRateLimitResetAt(response.headers, Date.now());
+    const detail = errText ? errText.slice(0, 160) : "no body";
+    const reason = `HTTP 429 on ${config.model || "openrouter/auto"} — ${detail}`;
+    rateLimitRegistry.mark(apiKey, config.model || "openrouter/auto", resetAtMs, reason);
+    throw new RateLimitedError(resetAtMs, reason);
+  }
+
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
     throw new Error(`OpenRouter API error (${response.status}): ${errText}`);
@@ -197,6 +277,15 @@ async function callOpenRouter(
   const json = (await response.json()) as ChatCompletionResponse & { error?: { message?: string; code?: unknown } };
   // OpenRouter sometimes returns HTTP 200 with an error object instead of choices.
   if (json.error) {
+    // 429 can also surface as a 200 envelope with an error.code === 429 body —
+    // treat it identically so the retry-not-before contract still kicks in.
+    if (json.error.code === 429 || json.error.code === "429") {
+      const resetAtMs = resolveRateLimitResetAt(response.headers, Date.now());
+      const msg = typeof json.error.message === "string" ? json.error.message : JSON.stringify(json.error);
+      const reason = `Body code 429 on ${config.model || "openrouter/auto"} — ${msg.slice(0, 160)}`;
+      rateLimitRegistry.mark(apiKey, config.model || "openrouter/auto", resetAtMs, reason);
+      throw new RateLimitedError(resetAtMs, reason);
+    }
     const msg = typeof json.error.message === "string" ? json.error.message : JSON.stringify(json.error);
     throw new Error(`OpenRouter error: ${msg}`);
   }
@@ -377,6 +466,62 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
   }
 
+  // ----- pre-flight: if this (key, model) pair is currently rate-limited
+  // per the in-process registry, short-circuit before even calling OpenRouter.
+  // Returning errorFamily: "transient_upstream" + retryNotBefore lets the
+  // heartbeat scheduler reschedule the run for the reset time without ever
+  // touching the network. See server/src/services/heartbeat.ts (search for
+  // transientRecovery / retryNotBefore) for the consumer side.
+  {
+    const cached = rateLimitRegistry.peek(apiKey, model);
+    if (cached) {
+      const retryNotBefore = new Date(cached.resetAtMs).toISOString();
+      await emitSystem(
+        onLog,
+        `Skipping OpenRouter call: model is rate-limited until ${retryNotBefore} (${cached.reason})`,
+      );
+      if (api && currentIssueId) {
+        const body =
+          `_Run skipped — model **${model}** is rate-limited._\n\n` +
+          `Reset at: \`${retryNotBefore}\`\n\n` +
+          `Reason: ${cached.reason}\n\n` +
+          `_Paperclip will retry this run automatically after the reset time._`;
+        await api.addIssueComment(currentIssueId, { body }).catch(async (err) => {
+          const reason = err instanceof Error ? err.message : String(err);
+          await writeRawStderr(onLog, `[openrouter] could not post rate-limit pre-flight comment: ${reason}`);
+        });
+      }
+      await emitResult(onLog, {
+        text: "",
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        subtype: "rate_limited",
+        isError: false,
+        errors: [cached.reason],
+      });
+      return {
+        exitCode: 1,
+        signal: null,
+        timedOut: false,
+        errorFamily: "transient_upstream",
+        errorCode: "openrouter_rate_limited_cached",
+        errorMessage: `Model ${model} is rate-limited until ${retryNotBefore}: ${cached.reason}`,
+        retryNotBefore,
+        errorMeta: {
+          rateLimitedModel: model,
+          resetAtMs: cached.resetAtMs,
+          source: "registry-cache",
+        },
+        usage: { inputTokens: 0, outputTokens: 0 },
+        model,
+        provider: "openrouter",
+        biller: "openrouter",
+        billingType: resolveBillingType(config),
+      };
+    }
+  }
+
   let lastGenerationId: string | undefined;
   let totalUsage: UsageSummary = { inputTokens: 0, outputTokens: 0 };
   // Track per-turn cost reported inline by OpenRouter (usage.cost). Stays null
@@ -385,8 +530,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let totalCostUsd: number | null = null;
   let finalAssistantText = "";
   let turn = 0;
-  let stoppedReason: "completed" | "max_turns" | "error" | "repeat_loop" = "completed";
+  let stoppedReason: "completed" | "max_turns" | "error" | "repeat_loop" | "rate_limited" = "completed";
   let runError: { message: string; code: string } | null = null;
+  let rateLimitedAtMs: number | null = null;
   // Repeat-call detection: if the model calls the same tool with the same args
   // three times in a row, break the loop. Prevents 20+ retries when the model
   // misreads an error message and keeps "fixing" it the same wrong way.
@@ -401,6 +547,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       try {
         response = await callOpenRouter(apiKey, config, messages, tools);
       } catch (err) {
+        if (err instanceof RateLimitedError) {
+          rateLimitedAtMs = err.resetAtMs;
+          runError = { message: err.reason, code: "openrouter_rate_limited" };
+          stoppedReason = "rate_limited";
+          await emitSystem(
+            onLog,
+            `OpenRouter returned 429; pausing this model until ${new Date(err.resetAtMs).toISOString()}.`,
+          );
+          break;
+        }
         const reason = err instanceof Error ? err.message : String(err);
         runError = { message: reason, code: "openrouter_request_failed" };
         stoppedReason = "error";
@@ -517,14 +673,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       if (stoppedReason === "repeat_loop") break;
     }
 
-    if (turn >= maxTurns && stoppedReason !== "error") {
+    if (turn >= maxTurns && stoppedReason !== "error" && stoppedReason !== "rate_limited") {
       stoppedReason = "max_turns";
       await writeRawStderr(onLog, `[openrouter] hit max_turns (${maxTurns}), stopping`);
     }
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    runError = { message: reason, code: "openrouter_loop_failed" };
-    stoppedReason = "error";
+    if (err instanceof RateLimitedError) {
+      rateLimitedAtMs = err.resetAtMs;
+      runError = { message: err.reason, code: "openrouter_rate_limited" };
+      stoppedReason = "rate_limited";
+    } else {
+      const reason = err instanceof Error ? err.message : String(err);
+      runError = { message: reason, code: "openrouter_loop_failed" };
+      stoppedReason = "error";
+    }
   }
 
   // ----- post-loop: cost, comment, status -----
@@ -546,7 +708,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // a text message (common for weaker models), synthesize a fallback summary
   // from the last few tool actions — better than silent completion.
   let commentBody = finalAssistantText.trim();
-  if (!commentBody && api && currentIssueId) {
+  // Rate-limited runs get their own auto-resume message instead of the
+  // "model forgot to summarize" fallback — different cause, different fix.
+  if (stoppedReason === "rate_limited" && rateLimitedAtMs) {
+    commentBody =
+      `_Run paused — OpenRouter rate-limited model **${model}**._\n\n` +
+      `Resumes at: \`${new Date(rateLimitedAtMs).toISOString()}\`\n\n` +
+      (runError ? `Reason: ${runError.message}\n\n` : "") +
+      `_Paperclip will automatically retry this run after the reset time. No action needed._`;
+  } else if (!commentBody && api && currentIssueId) {
     const lastToolNames: string[] = [];
     for (let i = messages.length - 1; i >= 0 && lastToolNames.length < 3; i -= 1) {
       const m = messages[i];
@@ -581,8 +751,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
   }
 
-  // Update issue status based on outcome.
-  if (api && currentIssueId) {
+  // Update issue status based on outcome. Skip for rate_limited — Paperclip's
+  // bounded transient-retry will pick the run up again at retryNotBefore, and
+  // we don't want to flip the issue to blocked just to flip it back later.
+  if (api && currentIssueId && stoppedReason !== "rate_limited") {
     let nextStatus: string | null = null;
     let statusReason: string | null = null;
     if (stoppedReason === "completed") {
@@ -617,6 +789,37 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     isError: stoppedReason === "error",
     errors: runError ? [runError.message] : [],
   });
+
+  if (stoppedReason === "rate_limited" && rateLimitedAtMs && runError) {
+    // Signal Paperclip's heartbeat to reschedule rather than mark the run as
+    // a hard failure. retryNotBefore is the consumed contract (see
+    // server/src/services/heartbeat.ts: transientRecovery / readTransient
+    // RetryNotBeforeFromRun). errorFamily: "transient_upstream" classifies
+    // this for the bounded-retry path.
+    return {
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      errorFamily: "transient_upstream",
+      errorMessage: runError.message,
+      errorCode: runError.code,
+      retryNotBefore: new Date(rateLimitedAtMs).toISOString(),
+      errorMeta: {
+        rateLimitedModel: model,
+        resetAtMs: rateLimitedAtMs,
+        source: "live-429",
+      },
+      usage: totalUsage,
+      model,
+      provider: "openrouter",
+      biller: "openrouter",
+      billingType: resolveBillingType(config),
+      costUsd,
+      sessionId: lastGenerationId ?? null,
+      sessionDisplayId: lastGenerationId ?? null,
+      sessionParams: lastGenerationId ? { lastGenerationId } : null,
+    };
+  }
 
   if (stoppedReason === "error" && runError) {
     return {
