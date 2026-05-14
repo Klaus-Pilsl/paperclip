@@ -77,6 +77,27 @@ async function findAvailablePort(startPort: number): Promise<number> {
   );
 }
 
+// On Windows, a hard shutdown (terminal close / Ctrl+C race) can orphan postgres
+// worker processes (bg writer, checkpointer, autovacuum, …) that hold the named
+// shared-memory segment even after the main postmaster exits. This prevents a
+// fresh postgres from starting ("pre-existing shared memory block is still in
+// use"). Kill all postgres.exe processes by image name and wait for Windows to
+// release the kernel objects before retrying.
+async function killOrphanedPostgresOnWindows(): Promise<void> {
+  await new Promise<void>((res) => {
+    const tk = spawn("taskkill", ["/im", "postgres.exe", "/f"], { stdio: "ignore" });
+    tk.on("close", () => res());
+    tk.on("error", () => res());
+  });
+  await new Promise((res) => setTimeout(res, 1500));
+}
+
+function hasSharedMemoryConflict(logs: string[]): boolean {
+  return logs.some((line) =>
+    line.toLowerCase().includes("shared memory block is still in use"),
+  );
+}
+
 async function loadEmbeddedPostgresCtor(): Promise<EmbeddedPostgresCtor> {
   try {
     const mod = await import("embedded-postgres");
@@ -182,10 +203,23 @@ async function ensureEmbeddedPostgresConnection(
   try {
     await instance.start();
   } catch (error) {
-    throw formatEmbeddedPostgresError(error, {
-      fallbackMessage: `Failed to start embedded PostgreSQL on port ${selectedPort}`,
-      recentLogs: logBuffer.getRecentLogs(),
-    });
+    const recentLogs = logBuffer.getRecentLogs();
+    if (process.platform === "win32" && hasSharedMemoryConflict(recentLogs)) {
+      await killOrphanedPostgresOnWindows();
+      try {
+        await instance.start();
+      } catch (retryError) {
+        throw formatEmbeddedPostgresError(retryError, {
+          fallbackMessage: `Failed to start embedded PostgreSQL on port ${selectedPort}`,
+          recentLogs: logBuffer.getRecentLogs(),
+        });
+      }
+    } else {
+      throw formatEmbeddedPostgresError(error, {
+        fallbackMessage: `Failed to start embedded PostgreSQL on port ${selectedPort}`,
+        recentLogs,
+      });
+    }
   }
 
   const adminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${selectedPort}/postgres`;
