@@ -29,7 +29,15 @@ try {
   // target does not exist yet
 }
 
-const relativeSdkDir = relative(scopeDir, sdkDir);
-symlinkSync(relativeSdkDir, linkTarget, "dir");
+// On Windows, directory symlinks ("dir") require SeCreateSymbolicLinkPrivilege
+// (admin or Developer Mode), so a normal `pnpm install` postinstall fails with
+// EPERM. Junctions work for directories without elevation but need an absolute
+// target path. Use a junction on Windows and a relative symlink elsewhere.
+if (process.platform === "win32") {
+  symlinkSync(sdkDir, linkTarget, "junction");
+} else {
+  const relativeSdkDir = relative(scopeDir, sdkDir);
+  symlinkSync(relativeSdkDir, linkTarget, "dir");
+}
 
 console.log(`  ✓ Linked local @paperclipai/plugin-sdk for ${packageDir}`);
