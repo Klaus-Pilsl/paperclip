@@ -3,7 +3,12 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import path from "node:path";
 import { ensurePostgresDatabase, getPostgresDataDirectory } from "./client.js";
-import { createEmbeddedPostgresLogBuffer, formatEmbeddedPostgresError } from "./embedded-postgres-error.js";
+import {
+  createEmbeddedPostgresLogBuffer,
+  formatEmbeddedPostgresError,
+  hasSharedMemoryConflict,
+  killOrphanedPostgresOnWindows,
+} from "./embedded-postgres-error.js";
 import { resolveDatabaseTarget } from "./runtime-config.js";
 
 type EmbeddedPostgresInstance = {
@@ -57,7 +62,7 @@ async function isPortInUse(port: number): Promise<boolean> {
     const server = createServer();
     server.unref();
     server.once("error", (error: NodeJS.ErrnoException) => {
-      resolve(error.code === "EADDRINUSE");
+      resolve(error.code === "EADDRINUSE" || error.code === "EACCES");
     });
     server.listen(port, "127.0.0.1", () => {
       server.close();
@@ -66,35 +71,44 @@ async function isPortInUse(port: number): Promise<boolean> {
   });
 }
 
+// On Windows, Hyper-V/WSL2/Docker reserve port ranges via SO_EXCLUSIVEADDRUSE.
+// Node.js can still bind these ports (it doesn't use SO_EXCLUSIVEADDRUSE), but
+// PostgreSQL cannot — so isPortInUse() returns false yet postgres fails with
+// "Permission denied". We read the live exclusion list from netsh and skip those
+// ports entirely in findAvailablePort().
+async function getWindowsExcludedPortRanges(): Promise<[number, number][]> {
+  if (process.platform !== "win32") return [];
+  return new Promise((resolve) => {
+    const ranges: [number, number][] = [];
+    const proc = spawn("netsh", ["int", "ipv4", "show", "excludedportrange", "protocol=tcp"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    let output = "";
+    proc.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+    proc.on("close", () => {
+      for (const line of output.split(/\r?\n/)) {
+        const m = line.match(/^\s*(\d+)\s+(\d+)/);
+        if (m) ranges.push([Number(m[1]), Number(m[2])]);
+      }
+      resolve(ranges);
+    });
+    proc.on("error", () => resolve([]));
+  });
+}
+
+function isPortInExcludedRange(port: number, excluded: [number, number][]): boolean {
+  return excluded.some(([start, end]) => port >= start && port <= end);
+}
+
 async function findAvailablePort(startPort: number): Promise<number> {
-  const maxLookahead = 20;
+  const maxLookahead = 100;
+  const excluded = await getWindowsExcludedPortRanges();
   let port = startPort;
   for (let i = 0; i < maxLookahead; i += 1, port += 1) {
-    if (!(await isPortInUse(port))) return port;
+    if (!isPortInExcludedRange(port, excluded) && !(await isPortInUse(port))) return port;
   }
   throw new Error(
     `Embedded PostgreSQL could not find a free port from ${startPort} to ${startPort + maxLookahead - 1}`,
-  );
-}
-
-// On Windows, a hard shutdown (terminal close / Ctrl+C race) can orphan postgres
-// worker processes (bg writer, checkpointer, autovacuum, …) that hold the named
-// shared-memory segment even after the main postmaster exits. This prevents a
-// fresh postgres from starting ("pre-existing shared memory block is still in
-// use"). Kill all postgres.exe processes by image name and wait for Windows to
-// release the kernel objects before retrying.
-async function killOrphanedPostgresOnWindows(): Promise<void> {
-  await new Promise<void>((res) => {
-    const tk = spawn("taskkill", ["/im", "postgres.exe", "/f"], { stdio: "ignore" });
-    tk.on("close", () => res());
-    tk.on("error", () => res());
-  });
-  await new Promise((res) => setTimeout(res, 1500));
-}
-
-function hasSharedMemoryConflict(logs: string[]): boolean {
-  return logs.some((line) =>
-    line.toLowerCase().includes("shared memory block is still in use"),
   );
 }
 

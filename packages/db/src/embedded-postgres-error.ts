@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+
 const DEFAULT_RECENT_LOG_LIMIT = 40;
 const RECENT_LOG_SUMMARY_LINES = 8;
 
@@ -86,4 +88,25 @@ export function formatEmbeddedPostgresError(
   }
 
   return new Error(parts.join(" "));
+}
+
+export function hasSharedMemoryConflict(recentLogs: string[]): boolean {
+  return recentLogs.some((line) =>
+    line.toLowerCase().includes("shared memory block is still in use"),
+  );
+}
+
+// On Windows, a hard shutdown (terminal close / Ctrl+C race) can orphan postgres
+// worker processes (bg writer, checkpointer, autovacuum, …) that hold the named
+// shared-memory segment even after the main postmaster exits. This prevents a
+// fresh postgres from starting ("pre-existing shared memory block is still in
+// use"). Kill all postgres.exe processes by image name and wait for Windows to
+// release the kernel objects before retrying.
+export async function killOrphanedPostgresOnWindows(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const task = spawn("taskkill", ["/im", "postgres.exe", "/f"], { stdio: "ignore" });
+    task.on("close", () => resolve());
+    task.on("error", () => resolve());
+  });
+  await new Promise((resolve) => setTimeout(resolve, 1500));
 }

@@ -12,6 +12,8 @@ import {
   createDb,
   ensurePostgresDatabase,
   formatEmbeddedPostgresError,
+  hasSharedMemoryConflict,
+  killOrphanedPostgresOnWindows,
   getPostgresDataDirectory,
   inspectMigrations,
   applyPendingMigrations,
@@ -434,10 +436,26 @@ export async function startServer(): Promise<StartedServer> {
           await embeddedPostgres.start();
         } catch (err) {
           logEmbeddedPostgresFailure("start", err);
-          throw formatEmbeddedPostgresError(err, {
-            fallbackMessage: `Failed to start embedded PostgreSQL on port ${port}`,
-            recentLogs: logBuffer.getRecentLogs(),
-          });
+          if (process.platform === "win32" && hasSharedMemoryConflict(logBuffer.getRecentLogs())) {
+            logger.warn(
+              "Embedded PostgreSQL start failed due to an orphaned postgres.exe holding the data directory; killing stray processes and retrying",
+            );
+            await killOrphanedPostgresOnWindows();
+            try {
+              await embeddedPostgres.start();
+            } catch (retryErr) {
+              logEmbeddedPostgresFailure("start", retryErr);
+              throw formatEmbeddedPostgresError(retryErr, {
+                fallbackMessage: `Failed to start embedded PostgreSQL on port ${port}`,
+                recentLogs: logBuffer.getRecentLogs(),
+              });
+            }
+          } else {
+            throw formatEmbeddedPostgresError(err, {
+              fallbackMessage: `Failed to start embedded PostgreSQL on port ${port}`,
+              recentLogs: logBuffer.getRecentLogs(),
+            });
+          }
         }
         embeddedPostgresStartedByThisProcess = true;
       }

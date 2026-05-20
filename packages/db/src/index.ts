@@ -29,6 +29,8 @@ export {
 export {
   createEmbeddedPostgresLogBuffer,
   formatEmbeddedPostgresError,
+  hasSharedMemoryConflict,
+  killOrphanedPostgresOnWindows,
 } from "./embedded-postgres-error.js";
 export { issueRelations } from "./schema/issue_relations.js";
 export { issueReferenceMentions } from "./schema/issue_reference_mentions.js";
